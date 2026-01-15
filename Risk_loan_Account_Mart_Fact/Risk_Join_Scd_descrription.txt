@@ -1,0 +1,39 @@
+
+
+from DISHA_MART_ANALYTICS.CREDIT_RISK_MART.RISK_LOAN_ACCOUNT_MART_FACT_V1 a
+left join (select * from DISHA_MART_ANALYTICS.CREDIT_RISK_MART.RISK_LOAN_ACCOUNT_MART_DIM) b1
+on trim(a.loan_no) = trim(b1.loan_no) and date(b1.start_timestamp)<=dateadd('day',1,a.business_date) 
+and (date(b1.end_timestamp)>dateadd('day',1,a.business_date) or date(b1.end_timestamp) is null)
+
+
+
+select * FROM TABLE WHere date(start_timestamp)<='2025-09-01' and (end_timestamp>'2025-09-01' or end_timestamp is null)
+
+
+
+
+Id, Name, Activation_flag, Start_date, end_date
+
+
+---------1, Ritu ,	0, 		20-08-2025 1	 29-09-2025--done
+1, Vinay	1		29092025			29-09-2025-----
+
+2,akash
+
+
+
+a left Join b 
+ona.id=b.id
+
+a-1,2,3,5
+b-2,3,4
+
+
+
+1,9 
+
+For same pk
+compare source_row_hash with target_row_hash
+if same then ignore
+if change-
+case when activation_flag=1 then target 0, else 9 
