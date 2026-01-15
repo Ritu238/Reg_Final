@@ -1,0 +1,678 @@
+CREATE OR REPLACE PROCEDURE DISHA_MART_ANALYTICS.REGULATORY_MART.LOAD_CORP_LOAN_ACCOUNT_DETAILS_MART_V2("START_DATE" DATE DEFAULT DATE_ADDMONTHSTODATE(-1, CURRENT_DATE()))
+RETURNS VARCHAR(255)
+LANGUAGE SQL
+EXECUTE AS OWNER
+AS 'DECLARE 
+	PROC_NAME VARCHAR(500):=''DISHA_MART_ANALYTICS.REGULATORY_MART.LOAD_CORP_LOAN_ACCOUNT_DETAILS_MART_V2'';
+	TBL_NAME VARCHAR(500):=''DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2'';
+    TOTAL_ROWS_IN_PREFINAL INTEGER DEFAULT 0;
+    ROWS_INSERTED INTEGER DEFAULT 0;
+    ROWS_UPDATED INTEGER DEFAULT 0;
+    ROWS_UNCHANGED INTEGER DEFAULT 0;
+    DUPLICATE_COUNT INTEGER;
+    DUPLICATE_DETAILS VARCHAR(2000);
+    CURR_TIME TIMESTAMP := TO_VARCHAR(CURRENT_TIMESTAMP());
+    ERROR_MESSAGE VARCHAR(1000);
+    FINAL_OUTPUT VARCHAR(4000);
+
+
+BEGIN
+
+	
+    -- STEP 1: Initialize date parameters for the current month
+    LET MONTH_START_DATE DATE := DATE_TRUNC(''MONTH'',:START_DATE);
+    LET MONTH_END_DATE DATE := LAST_DAY(:START_DATE);
+
+	
+	
+	--Create Main Table ---
+	CREATE TABLE IF NOT EXISTS DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2
+	(
+	DAILY_DATE DATE,
+	ddate date,
+	ibankid Number,
+	scorporateloanno VARCHAR(255),
+	scorporatecin VARCHAR(255),
+	scorploancat VARCHAR(255),
+	scorploansubcat VARCHAR(255),
+	scorpborrowertype VARCHAR(255),
+	scorploanpurpose VARCHAR(255),
+	ncorpsanctamt number(38,2),
+	dcorpsanctdate Date,
+	ndsrasanctamt number(38,2),
+	ndsraamtateop number(38,2),
+	imoratoriumperiod VARCHAR(255),
+	iloantencont Number,
+	sloantenincmoraperiod VARCHAR(255),
+	iloantenresidual Number,
+	ncorproi number(38,2),
+	scorptypeofint VARCHAR(255),
+	ncorpemi number(38,2),
+	ncorppemi number(38,2),
+	dcorpfirstdisbdate Date,
+	dcorpemistartdate Date,
+	dcorppemistartdate Date,
+	dcorpemistartdaterev Date,
+	nlaonamtdisb number(38,2),
+	ncummuloandisb number(38,2),
+	scorploanstatus VARCHAR(255),
+	namtoutundercons number(38,2),
+	scorpcounterparty VARCHAR(255),
+	scorpmortgua float,
+	namtunderguar number(38,2),
+	ncorptotalout number(38,2),
+	ncorppo number(38,2),
+	ncorpio number(38,2),
+	ncorpod number(38,2),
+	ncorplsb number(38,2),
+	ncorpothercharges number(38,2),
+	ncorptotalloanoverdue number(38,2),
+	ncorppod number(38,2),
+	ncorpiod number(38,2),
+	ncorpodo number(38,2),
+	scorpacctlcosed VARCHAR(255),
+	scorpassetclass VARCHAR(255),
+	scorpecl VARCHAR(255),
+	ddateofclass Date,
+	scorprw VARCHAR(255),
+	ncorpprovamt number(38,2),
+	scorpdefhfc VARCHAR(255),
+	scorpsarfaesiact VARCHAR(255),
+	namoutinvolved number(38,2),
+	namountrecovered number(38,2),
+	sstaygranted VARCHAR(255),
+	scorporateborrowername VARCHAR(255),
+	sregadd VARCHAR(2000),
+	scorpadd VARCHAR(2000),
+	stypeofconst VARCHAR(255),
+	sgroupname VARCHAR(255),
+	sgroupcomphfc VARCHAR(255),
+	nexposuretoborrower VARCHAR(255),
+	ntotalexptobg number(38,2),
+	stypeofexposure VARCHAR(255),
+	ncorploanrepayment number(38,2),
+	INTEREST_ACCRUED_BUT_NOT_DUE number(38,2),
+	CAR_OUTSTANDING FLOAT,
+	CAR_CLASSIFICATION VARCHAR(2500)
+	);
+	
+	
+	-- CLEAN EXISTING DATA FOR GIVEN MONTH
+    DELETE FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2
+    WHERE ddate = LAST_DAY(:START_DATE);
+	
+	--  CLEAN UP TEMPORARY TABLES
+    DROP TABLE IF EXISTS DISHA_MART_ANALYTICS.REGULATORY_MART.CURRENT_MONTH_CORP_LOAN_DETAILS;
+	DROP TABLE IF EXISTS DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2_PREFINAL;
+    
+    --  CREATE TEMPORARY TABLE FOR ACTIVE LOANS WITH SPECIFIC CRITERIA
+    CREATE OR REPLACE TEMPORARY TABLE DISHA_MART_ANALYTICS.REGULATORY_MART.CURRENT_MONTH_CORP_LOAN_DETAILS AS
+    SELECT
+	DISTINCT	
+        LD.LOAN_NO AS LOAN_ACCOUNT_NUMBER, 
+        CRF.CUST_ID_FLEX AS PRIMARY_CUST_ID
+    FROM 
+        (SELECT * FROM REG_UAT_BACKUP.BASE_MODEL_DATA.LOAN_ACCOUNT_DETAILS
+	WHERE LOAN_CLOSURE_DATE IS NULL AND ACTIVATION_FLAG=1
+         ) LD 
+    LEFT JOIN 
+        (SELECT CUST_ID_FLEX,CUSTOMER_TYPE 
+			FROM REG_UAT_BACKUP.BASE_MODEL_DATA.CUSTOMER_DETAILS_FLEXCUBE WHERE ACTIVATION_FLAG=1
+         ) CDF
+        ON TRIM(LD.CUST_ID_FLEX) = TRIM(CDF.CUST_ID_FLEX) 
+    LEFT JOIN 
+        (SELECT LOAN_NO,ACCT_CUST_REL,CUST_ID_FLEX 
+			FROM REG_UAT_BACKUP.BASE_MODEL_DATA.CUSTOMER_ROLE_FLEXCUBE WHERE ACTIVATION_FLAG=1
+         ) CRF 
+        ON TRIM(LD.LOAN_NO) = TRIM(CRF.LOAN_NO)
+    WHERE 
+        LD.FIRST_DISBURSAL_DATE >= :MONTH_START_DATE 
+        AND LD.FIRST_DISBURSAL_DATE <= :MONTH_END_DATE
+        AND UPPER(TRIM(CDF.CUSTOMER_TYPE)) = ''C''
+        AND UPPER(TRIM(CRF.ACCT_CUST_REL)) IN (''JAF'', ''SOW'')
+		
+	UNION
+	
+	(
+		/*SELECT TRIM(SCORPORATELOANNO)as SCORPORATELOANNO,CAST(LD1.CUST_ID_FLEX AS INT)AS scorporatecin FROM DISHA_L2_CURATED.HISTORICAL_LOAD.STG_CORP_LOAN_DETAILS_MAR25 A 
+		LEFT JOIN  (SELECT * FROM REG_UAT_BACKUP.BASE_MODEL_DATA.LOAN_ACCOUNT_DETAILS WHERE ACTIVATION_FLAG=1)
+          LD1 ON SCORPORATELOANNO=TRIM(LD1.LOAN_NO) WHERE A.SCORPACCTLCOSED=''NO'' AND A.DDATE=LAST_DAY(DATE_ADDMONTHSTODATE(-1, :START_DATE))
+		--UNION*/
+		SELECT  scorporateloanno,CAST(LD1.CUST_ID_FLEX AS INT)AS scorporatecin FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2 A
+		LEFT JOIN  (SELECT * FROM REG_UAT_BACKUP.BASE_MODEL_DATA.LOAN_ACCOUNT_DETAILS WHERE ACTIVATION_FLAG=1)
+          LD1 ON scorporateloanno=TRIM(LD1.LOAN_NO)
+		WHERE A.SCORPACCTLCOSED=''NO'' AND A.DDATE=LAST_DAY(DATE_ADDMONTHSTODATE(-1, :START_DATE))
+	)
+	;
+			   -- STEP 2: CLEAN EXISTING DATA FOR GIVEN MONTH
+    DELETE FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2
+    WHERE ddate = LAST_DAY(:START_DATE);
+	
+	-- STEP 4: CREATE PRE-FINAL MART WITH ALL REQUIRED CALCULATIONS
+	CREATE TEMPORARY TABLE DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2_PREFINAL
+	(
+	ddate date,
+	ibankid Number,
+	scorporateloanno VARCHAR(255),
+	scorporatecin VARCHAR(255),
+	scorploancat VARCHAR(255),
+	scorploansubcat VARCHAR(255),
+	scorpborrowertype VARCHAR(255),
+	scorploanpurpose VARCHAR(255),
+	ncorpsanctamt number(38,2),
+	dcorpsanctdate Date,
+	ndsrasanctamt number(38,2),
+	ndsraamtateop number(38,2),
+	imoratoriumperiod VARCHAR(255),
+	iloantencont Number,
+	sloantenincmoraperiod VARCHAR(255),
+	iloantenresidual Number,
+	ncorproi number(38,2),
+	scorptypeofint VARCHAR(255),
+	ncorpemi number(38,2),
+	ncorppemi number(38,2),
+	dcorpfirstdisbdate Date,
+	dcorpemistartdate Date,
+	dcorppemistartdate Date,
+	dcorpemistartdaterev Date,
+	nlaonamtdisb number(38,2),
+	ncummuloandisb number(38,2),
+	scorploanstatus VARCHAR(255),
+	namtoutundercons number(38,2),
+	scorpcounterparty VARCHAR(255),
+	scorpmortgua float,
+	namtunderguar number(38,2),
+	ncorppo number(38,2),
+	ncorpio number(38,2),
+	ncorpod number(38,2),
+	ncorpothercharges number(38,2),
+	ncorppod number(38,2),
+	ncorpiod number(38,2),
+	ncorpodo number(38,2),
+	scorpacctlcosed VARCHAR(255),
+	scorpassetclass VARCHAR(255),
+	scorpecl VARCHAR(255),
+	ddateofclass Date,
+	ncorpprovamt number(38,2),
+	scorpdefhfc VARCHAR(255),
+	scorpsarfaesiact VARCHAR(255),
+	namoutinvolved number(38,2),
+	namountrecovered number(38,2),
+	sstaygranted VARCHAR(255),
+	scorporateborrowername VARCHAR(255),
+	sregadd VARCHAR(2000),
+	scorpadd VARCHAR(2000),
+	stypeofconst VARCHAR(255),
+	sgroupname VARCHAR(255),
+	sgroupcomphfc VARCHAR(255),
+	nexposuretoborrower VARCHAR(255),
+	ntotalexptobg number(38,2),
+	stypeofexposure VARCHAR(255),
+	INTEREST_ACCRUED_BUT_NOT_DUE number(38,2),
+	CAR_OUTSTANDING FLOAT,
+	CAR_CLASSIFICATION VARCHAR(2500),
+	scorprw VARCHAR(255)
+
+	
+	)AS
+	SELECT 
+	ddate, ibankid, scorporateloanno, scorporatecin, scorploancat, scorploansubcat, scorpborrowertype, scorploanpurpose, ncorpsanctamt, dcorpsanctdate, ndsrasanctamt, ndsraamtateop, imoratoriumperiod, iloantencont, sloantenincmoraperiod, iloantenresidual, ncorproi, scorptypeofint, ncorpemi, ncorppemi, dcorpfirstdisbdate, dcorpemistartdate, dcorppemistartdate, dcorpemistartdaterev, nlaonamtdisb, ncummuloandisb, scorploanstatus, namtoutundercons, scorpcounterparty, scorpmortgua, namtunderguar, ncorppo, ncorpio, ncorpod, ncorpothercharges, ncorppod, ncorpiod, ncorpodo, scorpacctlcosed, scorpassetclass, scorpecl, ddateofclass, ncorpprovamt, scorpdefhfc, scorpsarfaesiact, namoutinvolved, namountrecovered, sstaygranted, scorporateborrowername, sregadd, scorpadd, stypeofconst, sgroupname, sgroupcomphfc, nexposuretoborrower, ntotalexptobg, stypeofexposure, INTEREST_ACCRUED_BUT_NOT_DUE,CAR_OUTSTANDING,CAR_CLASSIFICATION,scorprw
+	/*CASE
+   WHEN CAR_CLASSIFICATION in (''STAFF LOANS'',''PTC'') THEN ''RWA-01''
+	WHEN CAR_CLASSIFICATION in (''CRE'',''NON HOUSING LOANS'',''OTHER HOUSING LOANS'') THEN ''RWA-05''
+	WHEN CAR_CLASSIFICATION in (''CRE-RH'',''INDHL >75L LTV <=75%, BEFORE 1 AUG. 17'') THEN ''RWA-04''
+	WHEN CAR_CLASSIFICATION in (''IND-HL-<=30L, LTV <=80%'',''IND-HL 30-75L LTV 75% BEFORE AUG. 17'',''INDHL-30-75L, LTV <=80%, ON OR AFTER 1 AUG. 17'') THEN ''RWA-02''
+	WHEN CAR_CLASSIFICATION in (''IND-HL-<=30L, LTV 80-90%'',''INDHL-30-75L, LTV 75-80%, BEFORE AUG. 17'',''INDHL >75L LTV <=75%, AFTER OR 1 AUG. 17'') THEN ''RWA-03''
+	END AS scorprw*/
+	
+	FROM 
+	(
+	
+	SELECT 
+	ddate, ibankid, scorporateloanno, scorporatecin, scorploancat, scorploansubcat, scorpborrowertype, scorploanpurpose, ncorpsanctamt, dcorpsanctdate, ndsrasanctamt, ndsraamtateop, imoratoriumperiod, iloantencont, sloantenincmoraperiod, iloantenresidual, ncorproi, scorptypeofint, ncorpemi, ncorppemi, dcorpfirstdisbdate, dcorpemistartdate, dcorppemistartdate, dcorpemistartdaterev, nlaonamtdisb, ncummuloandisb, scorploanstatus, namtoutundercons, scorpcounterparty, scorpmortgua, namtunderguar, ncorppo, ncorpio, ncorpod, ncorpothercharges, ncorppod, ncorpiod, ncorpodo, scorpacctlcosed, scorpassetclass, scorpecl, ddateofclass, ncorpprovamt, scorpdefhfc, scorpsarfaesiact, namoutinvolved, namountrecovered, sstaygranted, scorporateborrowername, sregadd, scorpadd, stypeofconst, sgroupname, sgroupcomphfc, nexposuretoborrower, ntotalexptobg, stypeofexposure, INTEREST_ACCRUED_BUT_NOT_DUE,CAR_OUTSTANDING,
+	CAR_CLASSIFICATION,scorprw
+	/*CASE
+    WHEN UPPER(TRIM(LOAN_SCHEME)) = ''EL'' THEN ''STAFF LOANS''
+    WHEN POOL_ID LIKE ''%PTC%'' THEN ''PTC''
+    WHEN UPPER(TRIM(CRE_TAGGING)) = ''YES'' THEN ''CRE''
+    WHEN UPPER(TRIM(CRE_RH_TAGGING)) = ''YES'' THEN ''CRE-RH''
+    WHEN CAR_OUTSTANDING <= 3000000 AND DYNAMIC_LTV <= 80 THEN ''IND-HL-<=30L, LTV <=80%''
+    WHEN CAR_OUTSTANDING <= 3000000 AND DYNAMIC_LTV > 80 AND DYNAMIC_LTV <= 90 THEN ''IND-HL-<=30L, LTV 80-90%''
+    WHEN CAR_OUTSTANDING > 3000000 AND CAR_OUTSTANDING <= 7500000 AND DYNAMIC_LTV = 75 AND LOAN_AUTHOR_DATE < ''2017-08-01'' THEN ''IND-HL 30-75L LTV 75% BEFORE AUG. 17''
+    WHEN CAR_OUTSTANDING > 3000000 AND CAR_OUTSTANDING <= 7500000 AND DYNAMIC_LTV > 75 AND DYNAMIC_LTV <= 80 AND LOAN_AUTHOR_DATE < ''2017-08-01'' THEN ''INDHL-30-75L, LTV 75-80%, BEFORE AUG. 17''
+    WHEN CAR_OUTSTANDING > 3000000 AND CAR_OUTSTANDING <= 7500000 AND DYNAMIC_LTV <= 80 AND LOAN_AUTHOR_DATE >= ''2017-08-01'' THEN ''INDHL-30-75L, LTV <=80%, ON OR AFTER 1 AUG. 17''
+    WHEN CAR_OUTSTANDING > 7500000 AND DYNAMIC_LTV <= 75 AND LOAN_AUTHOR_DATE < ''2017-08-01'' THEN ''INDHL >75L LTV <=75%, BEFORE 1 AUG. 17''
+    WHEN CAR_OUTSTANDING > 7500000 AND DYNAMIC_LTV <= 75 AND LOAN_AUTHOR_DATE >= ''2017-08-01'' THEN ''INDHL >75L LTV <=75%, AFTER OR 1 AUG. 17''
+    WHEN UPPER(TRIM(LOAN_PRODUCT_NAME)) IN (''Other Loans - MSME'',''Other Loans - Home Equity'') THEN ''NON HOUSING LOANS''
+    WHEN UPPER(COALESCE(TRIM(LOAN_PRODUCT_NAME),''NULL'')) NOT IN (''Other Loans - MSME'',''Other Loans - Home Equity'') THEN ''OTHER HOUSING LOANS''
+    END AS CAR_CLASSIFICATION*/
+	FROM 
+	(
+	
+	SELECT 
+	ddate, ibankid, scorporateloanno, scorporatecin, scorploancat, scorploansubcat, scorpborrowertype, scorploanpurpose, ncorpsanctamt, dcorpsanctdate, ndsrasanctamt, ndsraamtateop, imoratoriumperiod, iloantencont, sloantenincmoraperiod, iloantenresidual, ncorproi, scorptypeofint, ncorpemi, ncorppemi, dcorpfirstdisbdate, dcorpemistartdate, dcorppemistartdate, dcorpemistartdaterev, nlaonamtdisb, ncummuloandisb, scorploanstatus, namtoutundercons, scorpcounterparty, scorpmortgua, namtunderguar, ncorppo, ncorpio, ncorpod, ncorpothercharges, ncorppod, ncorpiod, ncorpodo, scorpacctlcosed, scorpassetclass, scorpecl, ddateofclass, ncorpprovamt, scorpdefhfc, scorpsarfaesiact, namoutinvolved, namountrecovered, sstaygranted, scorporateborrowername, sregadd, scorpadd, stypeofconst, sgroupname, sgroupcomphfc, nexposuretoborrower, ntotalexptobg, stypeofexposure, INTEREST_ACCRUED_BUT_NOT_DUE,
+	CASE WHEN ncorpsanctamt > NCUMMULOANDISB THEN ncorppo+ncorpio+INTEREST_ACCRUED_BUT_NOT_DUE+ncorpsanctamt-NCUMMULOANDISB
+	ELSE ncorppo+ncorpio+INTEREST_ACCRUED_BUT_NOT_DUE END AS CAR_OUTSTANDING,LOAN_SCHEME,POOL_ID,CRE_TAGGING,CRE_RH_TAGGING,LOAN_PRODUCT_NAME,LOAN_AUTHOR_DATE,CAR_CLASSIFICATION
+	,scorprw
+	FROM
+	(
+	
+    SELECT 
+        
+        LAST_DAY(:START_DATE) AS ddate,
+        ''1'' AS IBANKID,
+        CML.LOAN_ACCOUNT_NUMBER AS scorporateloanno,
+        CML.PRIMARY_CUST_ID AS scorporatecin,
+        CASE 
+            WHEN UPPER(TRIM(LD.LOAN_PRODUCT_NAME)) IN (''OTHER LOANS - MSME'', ''OTHER LOANS - HOME EQUITY'') THEN ''LC-02''
+            WHEN UPPER(TRIM(LD.LOAN_PRODUCT_NAME)) IN (''CONSTRUCTION'',''RESALE PROPERTY PURCHASE'',''PURCHASE'',
+''REPAIR AND RENOVATION LOAN'',''PURCHASE AND CONSTRUCTION'') THEN ''LC-01''
+            ELSE NULL
+        END AS scorploancat,
+		CRP_OTH.SUB_CATEGORY_OF_LOAN AS scorploansubcat,
+		CRP_OTH.BORROWER_TYPE AS scorpborrowertype,
+		CRP_OTH.LOAN_PURPOSE AS scorploanpurpose,
+		LD.LOAN_SANCTION_AMOUNT AS ncorpsanctamt,
+		LD.LOAN_SANCTION_DATE AS dcorpsanctdate,
+		0 AS ndsrasanctamt,
+		0 AS ndsraamtateop,
+		0 AS imoratoriumperiod,
+		BOOK_RT.original_loan_tenure AS iloantencont,
+		''NO'' AS sloantenincmoraperiod,
+		BOOK_RT.remaining_tenure AS iloantenresidual,
+		BOOK_RT.rate_of_interest AS ncorproi,
+		CASE WHEN TRIM(UPPER(LD.LOAN_RATE_METHOD))=''FIXED'' THEN ''TOI-01''
+		WHEN TRIM(UPPER(LD.LOAN_RATE_METHOD))=''FLOATING'' THEN ''TOI-02''
+		ELSE ''TOI-03'' END AS scorptypeofint,
+		NULL AS ncorpemi,
+		NULL AS ncorppemi,
+		LD.FIRST_DISBURSAL_DATE AS dcorpfirstdisbdate,
+		NULL AS dcorpemistartdate,
+		NULL AS dcorppemistartdate,
+		NULL AS dcorpemistartdaterev,
+		DISB_DTL.nlaonamtdisb,
+		LD.DISB_AMOUNT AS ncummuloandisb,
+		CRP_CNTPTY.LOAN_STATUS AS scorploanstatus,
+		NULL AS namtoutundercons,
+		CRP_CNTPTY.COUNTER_PARTY AS scorpcounterparty,
+		NULL AS scorpmortgua,
+		NULL AS namtunderguar,
+		CASE WHEN  LD.LOAN_CLOSURE_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE THEN 0
+			 ELSE DULT.Total_POS
+			 END AS ncorppo,
+		
+		CASE WHEN LD.LOAN_CLOSURE_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE THEN 0
+			 WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) IN ( ''UNI SUBSTANDARD'',''UNI DOUBTFUL1 <1YR'',''UNI DOUBTFUL 1YR TO 3 YR'',''UNDOUBTFL 3 > 3YR'',''UNI LOSS'',''SARFESI UCRR'') THEN 0
+			 ELSE DULT.Overdue_Interest+DULT.pre_emi
+			 END AS ncorpio,
+		0 AS ncorpod,
+		0 AS ncorpothercharges,
+		
+		CASE WHEN  LD.LOAN_CLOSURE_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE THEN 0 
+		ELSE DULT.overdue_prin END AS ncorppod,
+		
+		CASE WHEN LD.LOAN_CLOSURE_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE THEN 0
+			 WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) IN ( ''UNI SUBSTANDARD'',''UNI DOUBTFUL1 <1YR'',''UNI DOUBTFUL 1YR TO 3 YR'',''UNDOUBTFL 3 > 3YR'',''UNI LOSS'',''SARFESI UCRR'') THEN 0
+			 ELSE DULT.Overdue_Interest END AS ncorpiod,
+		0 AS ncorpodo,
+        CASE 
+            WHEN LD.LOAN_CLOSURE_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE THEN ''YES''
+            ELSE ''NO'' 
+		END AS scorpacctlcosed,
+		CASE
+		WHEN LD.LOAN_CLOSURE_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE THEN ''CAC-00''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI STANDARD'' THEN  ''CAC-00''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI SMA0'' THEN  ''CAC-01''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI SMA1'' THEN  ''CAC-02''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI SMA2'' THEN  ''CAC-03''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI SUBSTANDARD'' THEN  ''CAC-04''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI DOUBTFUL1 <1YR'' THEN  ''CAC-05''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI DOUBTFUL 1YR TO 3 YR'' THEN  ''CAC-06''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNDOUBTFL 3 > 3YR'' THEN  ''CAC-07''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''UNI LOSS'' THEN  ''CAC-08''
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) = ''SARFESI UCRR'' THEN  ''CAC-07'' --UPPER(TRIM(LD.ASSET_CLASS_DESC))
+		END AS scorpassetclass,
+		NULL AS scorpecl,
+		CASE
+		WHEN UPPER(TRIM(LD.ASSET_CLASS_DESC)) IN (''UNI SUBSTANDARD'',''UNI DOUBTFUL1 <1YR'',''UNI DOUBTFUL 1YR TO 3 YR'',
+		''UNDOUBTFL 3 > 3YR'',''UNI LOSS'',''SARFESI UCRR'') THEN  
+			CASE 
+				WHEN LD.NPA_DATE IS NULL OR LD.NPA_DATE =''1950-01-01'' THEN  COALESCE(MANUAL_NPA.NPA_DATE,LD.NPA_DATE,:MONTH_END_DATE) ELSE COALESCE(LD.NPA_DATE,:MONTH_END_DATE)
+			END 
+		ELSE :MONTH_END_DATE END AS ddateofclass,
+		OTSD_MART.TOTAL_FINAL_PROVISION_AS_PER_IRAC AS ncorpprovamt,
+		''NO'' AS scorpdefhfc,
+		NULL AS scorpsarfaesiact,
+		NULL AS namoutinvolved,
+		NULL AS namountrecovered,
+		NULL AS sstaygranted,
+		CDF.CUST_NAME_SHORT AS scorporateborrowername,
+		ARRAY_TO_STRING(ARRAY_COMPACT(ARRAY_CONSTRUCT(CDF.CUST_ADDRESS1,CDF.CUST_ADDRESS2,CDF.CUST_ADDRESS3,CDF.CUST_TEHSIL,CDF.CUST_CITY,CDF.CUST_STATE,CDF.CUST_PINCODE)), '' '') AS sregadd,
+		ARRAY_TO_STRING(ARRAY_COMPACT(ARRAY_CONSTRUCT(CDF.CUST_ADDRESS1,CDF.CUST_ADDRESS2,CDF.CUST_ADDRESS3,CDF.CUST_TEHSIL,CDF.CUST_CITY,CDF.CUST_STATE,CDF.CUST_PINCODE)), '' '') AS scorpadd,
+		
+		CRP_OTH.TYPE_OF_CONSTITUTION AS stypeofconst,
+		CDF.CUST_NAME_SHORT AS sgroupname,
+		''NO'' AS sgroupcomphfc,
+		''NO'' AS nexposuretoborrower,
+		NULL AS ntotalexptobg,
+		''TERM LOAN'' AS stypeofexposure,
+		--GL_TX_DTL.INTEREST_ACCRUED_BUT_NOT_DUE,
+		LD.LOAN_SCHEME,
+		LD.POOL_ID,
+		LD.CRE_TAGGING,
+		LD.CRE_RH_TAGGING,
+		LD.LOAN_PRODUCT_NAME,
+		LD.LOAN_INITIATION_DATE AS LOAN_AUTHOR_DATE,
+		OTSD_MART.RWA_CLASSIFICATION as scorprw,
+		OTSD_MART.INTEREST_ACCRUED_BUT_NOT_DUE,
+		OTSD_MART.CAR_CLASSIFICATION
+    FROM 
+        (SELECT * FROM REG_UAT_BACKUP.BASE_MODEL_DATA.LOAN_ACCOUNT_DETAILS WHERE  ACTIVATION_FLAG=1
+         ) LD 
+    RIGHT JOIN 
+        DISHA_MART_ANALYTICS.REGULATORY_MART.CURRENT_MONTH_CORP_LOAN_DETAILS CML 
+        ON TRIM(LD.LOAN_NO) = TRIM(CML.LOAN_ACCOUNT_NUMBER)
+    LEFT JOIN (
+		SELECT LOAN_NO,SUM(DISBURSAL_AMOUNT) AS nlaonamtdisb
+		FROM REG_UAT_BACKUP.BASE_MODEL_DATA.DISBURSEMENT_DETAILS
+		WHERE DISBURSAL_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE
+		GROUP BY LOAN_NO
+		) DISB_DTL
+	ON TRIM(CML.LOAN_ACCOUNT_NUMBER)=TRIM(DISB_DTL.LOAN_NO)
+	LEFT JOIN
+	(SELECT  COD_ACCT_NO,DATE(DAT_POST) AS NPA_DATE FROM REG_UAT_BACKUP.FLEX_LMS.LN_X_ACCT_NPA_DTLS WHERE ACTIVATION_FLAG=1)MANUAL_NPA
+	ON TRIM(CML.LOAN_ACCOUNT_NUMBER)=TRIM(MANUAL_NPA.COD_ACCT_NO)
+		LEFT JOIN(
+		SELECT * FROM REG_UAT_BACKUP.BASE_MODEL_DATA.CUSTOMER_DETAILS_FLEXCUBE  WHERE ACTIVATION_FLAG=1 ) CDF
+	ON TRIM(CML.PRIMARY_CUST_ID)=TRIM(CDF.CUST_ID_FLEX)
+	LEFT JOIN (SELECT * FROM DISHA_L2_CURATED.MANUAL_INGESTION_TABLES.REGULATORY_CORP_OTHER WHERE TO_DATE(REPORT_DATE,''DD-MM-YYYY'')=LAST_DAY(:START_DATE)) CRP_OTH
+	ON TRIM (CRP_OTH.LOAN_NO)=TRIM(CML.LOAN_ACCOUNT_NUMBER)
+	LEFT JOIN (SELECT * FROM DISHA_L2_CURATED.MANUAL_INGESTION_TABLES.REGULATORY_CORP_COUNTER_PARTY WHERE TO_DATE(REPORT_DATE,''DD-MM-YYYY'')=LAST_DAY(:START_DATE)) CRP_CNTPTY
+	ON TRIM(CRP_CNTPTY.LOAN_NO)=TRIM(CML.LOAN_ACCOUNT_NUMBER)
+	LEFT JOIN (SELECT * FROM DISHA_L2_CURATED.BASE_MODEL_DATA.CORP_ADF WHERE REPORT_DATE=LAST_DAY(:START_DATE)) CORP_ADF
+	ON TRIM(CORP_ADF.LOAN_NO)=TRIM(CML.LOAN_ACCOUNT_NUMBER)
+	LEFT JOIN (SELECT * FROM DISHA_MART_ANALYTICS.REGULATORY_MART.OUTSTANDING_MART WHERE REPORT_DATE=LAST_DAY(:START_DATE)) OTSD_MART
+	ON TRIM(OTSD_MART.LOAN_NUMBER_NEW)=TRIM(CML.LOAN_ACCOUNT_NUMBER)
+	/*LEFT JOIN(
+		SELECT 
+			GL_ACCT_CODE,
+			LOAN_NO,
+			SUM(CASE 
+				WHEN UPPER(TRIM(DRCR_CODE)) = ''D'' THEN TXN_AMOUNT
+				WHEN UPPER(TRIM(DRCR_CODE)) = ''C'' THEN TXN_AMOUNT
+				ELSE 0 
+			END) AS INTEREST_ACCRUED_BUT_NOT_DUE
+		FROM 
+			REG_UAT_BACKUP.BASE_MODEL_DATA.GL_TXN_DETAILS
+		WHERE 
+			GL_ACCT_CODE IN (11050201, 11050202, 11050209, 11050210)
+			AND TXN_POSTING_DATE BETWEEN :MONTH_START_DATE AND :MONTH_END_DATE
+			AND ACTIVATION_FLAG=1
+		GROUP BY 
+			GL_ACCT_CODE,
+			LOAN_NO
+			--qualify needs to be removed once duplicate issue resolved
+			QUALIFY ROW_NUMBER() OVER(PARTITION BY LOAN_NO ORDER BY 1 DESC )=1
+			)GL_TX_DTL
+			ON TRIM(GL_TX_DTL.LOAN_NO)=TRIM(CML.LOAN_ACCOUNT_NUMBER)*/
+		LEFT JOIN (SELECT  EXTRACTED_DATE,TOTAL_POS,OVERDUE_INTEREST,OVERDUE_PRIN,LOAN_NO,pre_emi FROM DISHA_L2_CURATED.HISTORICAL_LOAD.COLL_DUELIST
+					WHERE EXTRACTED_DATE=DATEADD(DAY,1,LAST_DAY(:START_DATE)))DULT
+		ON TRIM(DULT.LOAN_NO)=TRIM(CML.LOAN_ACCOUNT_NUMBER)
+		LEFT JOIN (SELECT * FROM DISHA_L2_CURATED.HISTORICAL_LOAD.BOOKING_REPORT WHERE DATE(EXTRACTED_DATE)=DATEADD(DAY,1,:MONTH_END_DATE)) BOOK_RT 
+		ON TRIM(BOOK_RT.NEW_LOAN_ACCOUNT_NUMBER)=TRIM(CML.LOAN_ACCOUNT_NUMBER)
+			
+	)PF1)PF2)PF3
+	;
+	
+	-- Count total rows in prefinal table
+    SELECT COUNT(*) INTO :TOTAL_ROWS_IN_PREFINAL
+    FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2_PREFINAL;
+	
+	----IF TOTAL ROW COUNT 0 , Return Detailed Error
+	IF (TOTAL_ROWS_IN_PREFINAL = 0) THEN
+		ERROR_MESSAGE := ''PREFINAL QUERY EXECUTED SUCCESSFULLY BUT RETURNED 0 RECORDS. PLEASE VERIFY SOURCE DATA AND JOIN CONDITIONS.'';
+		
+		INSERT INTO DISHA_MART_ANALYTICS.AUDIT_INFO.DAILY_COUNT_RECON
+		(PROCEDURE_NAME, TABLE_NAME, EXECUTION_DATE, PREFINAL_CNT, INSERTED_CNT, UPDATED_CNT, UNCHANGED_CNT,STATUS,START_TIME,END_TIME,REMARKS)
+		SELECT :PROC_NAME,:TBL_NAME,DATE(:CURR_TIME),:TOTAL_ROWS_IN_PREFINAL,:ROWS_INSERTED,:ROWS_UPDATED,:ROWS_UNCHANGED,''FAIL'',:CURR_TIME,CURRENT_TIMESTAMP,:ERROR_MESSAGE;	
+		
+		RETURN ''PREFINAL_FAILED: '' || ERROR_MESSAGE;
+	END IF;	
+
+    -- Check for duplicates with details
+    WITH DUPLICATE_CHECK AS (
+        SELECT 
+            scorporateloanno, 
+            COUNT(*) AS RECORD_COUNT
+        FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2_PREFINAL
+        GROUP BY scorporateloanno
+        HAVING COUNT(*) > 1
+    )
+    SELECT COUNT(*) INTO :DUPLICATE_COUNT
+    FROM DUPLICATE_CHECK;
+	
+	
+	   -- If duplicates exist, return detailed error
+    IF (DUPLICATE_COUNT > 0) THEN
+          SELECT CONCAT(
+            ''===== DATA LOADING FAILED =====
+'',
+            ''Total Rows in Prefinal: '', :TOTAL_ROWS_IN_PREFINAL, ''
+'',
+            ''Duplicate Rows Found: '', :DUPLICATE_COUNT, ''
+'',
+            ''ERROR: Unable to load data due to duplicate entries for scorporateloanno.'',''
+''
+        ) INTO :FINAL_OUTPUT;
+							--INSERT AUDIT INFO INTO TABLE
+		/*DELETE FROM DISHA_MART_ANALYTICS.AUDIT_INFO.DAILY_COUNT_RECON 
+		WHERE  PROCEDURE_NAME=:PROC_NAME
+		AND	   EXECUTION_DATE=DATE(:CURR_TIME);*/
+		
+		INSERT INTO DISHA_MART_ANALYTICS.AUDIT_INFO.DAILY_COUNT_RECON
+		(PROCEDURE_NAME, TABLE_NAME, EXECUTION_DATE, PREFINAL_CNT, INSERTED_CNT, UPDATED_CNT, UNCHANGED_CNT,STATUS,START_TIME,END_TIME,REMARKS)
+		SELECT :PROC_NAME,:TBL_NAME,DATE(:CURR_TIME),:TOTAL_ROWS_IN_PREFINAL,:ROWS_INSERTED,:ROWS_UPDATED,:ROWS_UNCHANGED,''FAIL'',:CURR_TIME,CURRENT_TIMESTAMP,:FINAL_OUTPUT;
+		
+        RETURN FINAL_OUTPUT;
+    END IF;
+	
+	
+	INSERT INTO DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2(
+		DAILY_DATE, 
+		ddate,
+		ibankid,
+		scorporateloanno,
+		scorporatecin,
+		scorploancat,
+		scorploansubcat,
+		scorpborrowertype,
+		scorploanpurpose,
+		ncorpsanctamt,
+		dcorpsanctdate,
+		ndsrasanctamt,
+		ndsraamtateop,
+		imoratoriumperiod,
+		iloantencont,
+		sloantenincmoraperiod,
+		iloantenresidual,
+		ncorproi,
+		scorptypeofint,
+		ncorpemi,
+		ncorppemi,
+		dcorpfirstdisbdate,
+		dcorpemistartdate,
+		dcorppemistartdate,
+		dcorpemistartdaterev,
+		nlaonamtdisb,
+		ncummuloandisb,
+		scorploanstatus,
+		namtoutundercons,
+		scorpcounterparty,
+		scorpmortgua,
+		namtunderguar,
+		ncorptotalout,
+		ncorppo,
+		ncorpio,
+		ncorpod,
+		ncorplsb,
+		ncorpothercharges,
+		ncorptotalloanoverdue,
+		ncorppod,
+		ncorpiod,
+		ncorpodo,
+		scorpacctlcosed,
+		scorpassetclass,
+		scorpecl,
+		ddateofclass,
+		scorprw,
+		ncorpprovamt,
+		scorpdefhfc,
+		scorpsarfaesiact,
+		namoutinvolved,
+		namountrecovered,
+		sstaygranted,
+		scorporateborrowername,
+		sregadd,
+		scorpadd,
+		stypeofconst,
+		sgroupname,
+		sgroupcomphfc,
+		nexposuretoborrower,
+		ntotalexptobg,
+		stypeofexposure,
+		INTEREST_ACCRUED_BUT_NOT_DUE,
+		CAR_OUTSTANDING,
+		CAR_CLASSIFICATION,
+		ncorploanrepayment
+		
+
+		)
+	SELECT 
+	CURRENT_DATE() AS daily_date,
+	A.ddate,
+	A.ibankid,
+	A.scorporateloanno,
+	A.scorporatecin,
+	A.scorploancat,
+	COALESCE(A.scorploansubcat,C.scorploansubcat) as scorploansubcat,
+	COALESCE(A.scorpborrowertype,C.scorpborrowertype) as scorpborrowertype,
+	COALESCE(A.scorploanpurpose,C.scorploanpurpose) as scorploanpurpose,
+	A.ncorpsanctamt,
+	COALESCE(C.dcorpsanctdate,A.dcorpsanctdate) as dcorpsanctdate,
+	A.ndsrasanctamt,
+	A.ndsraamtateop,
+	A.imoratoriumperiod,
+	COALESCE(C.iloantencont,A.iloantencont) as iloantencont,
+	A.sloantenincmoraperiod,
+	A.iloantenresidual,
+	A.ncorproi,
+	A.scorptypeofint,
+	A.ncorpemi,
+	A.ncorppemi,
+	COALESCE(C.dcorpfirstdisbdate,A.dcorpfirstdisbdate) as dcorpfirstdisbdate,
+	A.dcorpemistartdate,
+	A.dcorppemistartdate,
+	A.dcorpemistartdaterev,
+	A.nlaonamtdisb,
+	A.ncummuloandisb,
+	COALESCE(A.scorploanstatus,C.scorploanstatus) AS scorploanstatus,
+	A.namtoutundercons,
+	COALESCE(A.scorpcounterparty,C.scorpcounterparty) AS scorpcounterparty,
+	A.scorpmortgua,
+	A.namtunderguar,
+	(A.ncorppo + A.ncorpio +A.ncorpod) AS ncorptotalout,
+	A.ncorppo,
+	A.ncorpio,
+	A.ncorpod,
+	(A.ncorppo - A.ncorppod) AS ncorplsb,
+	A.ncorpothercharges,
+	(A.ncorppod + A.ncorpiod + A.ncorpodo) AS ncorptotalloanoverdue,
+	A.ncorppod,
+	A.ncorpiod,
+	A.ncorpodo,
+	A.scorpacctlcosed,
+	A.scorpassetclass,
+	A.scorpecl,
+	A.ddateofclass,
+	A.scorprw,
+	A.ncorpprovamt,
+	A.scorpdefhfc,
+	A.scorpsarfaesiact,
+	A.namoutinvolved,
+	A.namountrecovered,
+	A.sstaygranted,
+	A.scorporateborrowername,
+	A.sregadd,
+	A.scorpadd,
+	COALESCE(A.stypeofconst,C.stypeofconst) as stypeofconst,
+	A.sgroupname,
+	A.sgroupcomphfc,
+	A.nexposuretoborrower,
+	A.ntotalexptobg,
+	A.stypeofexposure,
+	A.INTEREST_ACCRUED_BUT_NOT_DUE,
+	A.CAR_OUTSTANDING,
+	A.CAR_CLASSIFICATION,
+	(COALESCE(C.ncorppo,0) - COALESCE(A.ncorppo,0) + COALESCE(A.nlaonamtdisb,0)) AS ncorploanrepayment
+	FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2_PREFINAL A
+	/*LEFT JOIN DISHA_L2_CURATED.HISTORICAL_LOAD.STG_CORP_LOAN_DETAILS_MAR25 C
+	ON TRIM(C.scorporateloanno)=TRIM(A.scorporateloanno) and C.ddate = LAST_DAY(DATE_ADDMONTHSTODATE(-1, :START_DATE))*/
+	LEFT JOIN (SELECT * FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2 
+	WHERE ddate = LAST_DAY(DATE_ADDMONTHSTODATE(-1, :START_DATE))) C
+	ON TRIM(C.scorporateloanno)=TRIM(A.scorporateloanno);
+	
+			
+		        -- Count rows affected
+    ROWS_INSERTED := (SELECT COUNT(*) FROM DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2 WHERE ddate=LAST_DAY(:START_DATE));
+    ROWS_UPDATED := 0;
+    ROWS_UNCHANGED := :TOTAL_ROWS_IN_PREFINAL - (:ROWS_INSERTED + :ROWS_UPDATED);
+		 
+		 
+		 	        -- Prepare detailed output
+          SELECT CONCAT(
+            ''===== DATA LOADING REPORT =====
+'',
+            ''Process Timestamp: '', :CURR_TIME, ''
+'',
+            ''Total Rows in Prefinal: '', :TOTAL_ROWS_IN_PREFINAL, ''
+'',
+            ''Rows Inserted: '', :ROWS_INSERTED, ''
+'',
+            ''Rows Updated: '', :ROWS_UPDATED, ''
+'',
+            ''Rows Unchanged: '', :ROWS_UNCHANGED, ''
+
+'',
+            ''
+
+'',
+            ''Status: SUCCESSFULLY LOADED DATA INTO CORP_LOAN_ACCOUNT_DETAILS_MART_V2''
+        ) INTO :FINAL_OUTPUT;
+		--INSERT AUDIT INFO INTO TABLE
+		/*DELETE FROM DISHA_MART_ANALYTICS.AUDIT_INFO.DAILY_COUNT_RECON 
+		WHERE  PROCEDURE_NAME=:PROC_NAME
+		AND	   EXECUTION_DATE=DATE(:CURR_TIME);*/
+		
+		INSERT INTO DISHA_MART_ANALYTICS.AUDIT_INFO.DAILY_COUNT_RECON
+		(PROCEDURE_NAME, TABLE_NAME, EXECUTION_DATE, PREFINAL_CNT, INSERTED_CNT, UPDATED_CNT, UNCHANGED_CNT,STATUS,START_TIME,END_TIME,REMARKS)
+		SELECT :PROC_NAME,:TBL_NAME,DATE(:CURR_TIME),:TOTAL_ROWS_IN_PREFINAL,:ROWS_INSERTED,:ROWS_UPDATED,:ROWS_UNCHANGED,''PASS'',:CURR_TIME,CURRENT_TIMESTAMP,:FINAL_OUTPUT;
+		
+	 RETURN FINAL_OUTPUT;
+	
+	
+    -- STEP 5: CLEAN UP TEMPORARY TABLES
+    --DROP TABLE IF EXISTS DISHA_MART_ANALYTICS.REGULATORY_MART.CURRENT_MONTH_CORP_LOAN_DETAILS;
+	--DROP TABLE IF EXISTS DISHA_MART_ANALYTICS.REGULATORY_MART.CORP_LOAN_ACCOUNT_DETAILS_MART_V2_PREFINAL;
+	
+	----For Any other exception
+	EXCEPTION
+        WHEN OTHER THEN
+            ERROR_MESSAGE := ''ERROR IN SCD TYPE2 LOAD: '' || SQLERRM || '' (ERROR CODE: '' || sqlcode || '')'';
+                        
+		INSERT INTO DISHA_MART_ANALYTICS.AUDIT_INFO.DAILY_COUNT_RECON
+		(PROCEDURE_NAME, TABLE_NAME, EXECUTION_DATE, PREFINAL_CNT, INSERTED_CNT, UPDATED_CNT, UNCHANGED_CNT,STATUS,START_TIME,END_TIME,REMARKS)
+		SELECT :PROC_NAME,:TBL_NAME,DATE(:CURR_TIME),:TOTAL_ROWS_IN_PREFINAL,:ROWS_INSERTED,:ROWS_UPDATED,:ROWS_UNCHANGED,''FAIL'',:CURR_TIME,CURRENT_TIMESTAMP,:ERROR_MESSAGE;	
+		
+		RETURN ''DATA LOADING FAILED, '' || ERROR_MESSAGE;
+
+END';
